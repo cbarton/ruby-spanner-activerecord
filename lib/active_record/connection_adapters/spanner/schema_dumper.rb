@@ -14,6 +14,26 @@ module ActiveRecord
           schema_type(column) == :integer
         end
 
+        def header(stream)
+          str = StringIO.new
+          super(str)
+          stream.puts <<HEADER
+#{str.string.rstrip}
+  connection.start_batch_ddl
+
+HEADER
+        end
+
+        def trailer(stream)
+          stream.puts <<TRAILER
+  connection.run_batch
+rescue
+  abort_batch
+  raise
+TRAILER
+          super
+        end
+
         def prepare_column_options(column)
           super.tap do |spec|
             unless column.sql_type_metadata.allow_commit_timestamp.nil?
