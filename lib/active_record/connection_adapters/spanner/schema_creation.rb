@@ -119,6 +119,10 @@ module ActiveRecord
             sql << " NOT NULL"
           end
 
+          if options_include_default?(options)
+            sql << " DEFAULT (#{quote_default_expression(options[:default], options[:column])})"
+          end
+
           if !options[:allow_commit_timestamp].nil? &&
              options[:column].sql_type == "TIMESTAMP"
             sql << " OPTIONS (allow_commit_timestamp = "\

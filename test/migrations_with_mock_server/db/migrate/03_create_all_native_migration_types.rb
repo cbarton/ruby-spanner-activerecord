@@ -22,6 +22,7 @@ class CreateAllNativeMigrationTypes < ActiveRecord::Migration[6.0]
       t.column :col_binary, :binary
       t.column :col_boolean, :boolean
       t.column :col_json, :json
+      t.column :col_string_with_default, :string, default: 'default string'
 
       t.column :col_array_string, :string, array: true
       t.column :col_array_text, :text, array: true
@@ -39,4 +40,3 @@ class CreateAllNativeMigrationTypes < ActiveRecord::Migration[6.0]
     end
   end
 end
-
