@@ -8,6 +8,7 @@
 
 require "active_record/connection_adapters/spanner/schema_creation"
 require "active_record/connection_adapters/spanner/schema_dumper"
+require "active_record/connection_adapters/spanner/column"
 
 module ActiveRecord
   module ConnectionAdapters
@@ -109,11 +110,12 @@ module ActiveRecord
         end
 
         def new_column_from_field _table_name, field
-          ConnectionAdapters::Column.new \
+          Spanner::Column.new \
             field.name,
             field.default,
             fetch_type_metadata(field.spanner_type, field.ordinal_position, field.allow_commit_timestamp),
-            field.nullable
+            field.nullable,
+            field.default_function
         end
 
         def fetch_type_metadata sql_type, ordinal_position = nil, allow_commit_timestamp = nil

@@ -39,6 +39,11 @@ TRAILER
             unless column.sql_type_metadata.allow_commit_timestamp.nil?
               spec[:allow_commit_timestamp] = column.sql_type_metadata.allow_commit_timestamp
             end
+
+            if column.default_function
+              spec[:as] = column.default_function.inspect
+              spec[:stored] = true
+            end
           end
         end
 
