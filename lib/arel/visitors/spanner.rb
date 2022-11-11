@@ -30,10 +30,17 @@ module Arel # :nodoc: all
         collector.hints = {}
         collector.table_hints = {}
         collector.join_hints = {}
+        preparable = collector.preparable
+
         sql, binds = accept(node, collector).value
         sql = collector.hints[:statement_hint].value + sql if collector.hints[:statement_hint]
-        binds << collector.hints[:staleness] if collector.hints[:staleness]
-        [sql, binds]
+
+        if preparable
+          binds << collector.hints[:staleness] if collector.hints[:staleness]
+          [sql, binds]
+        else
+          sql
+        end
       end
 
       private
