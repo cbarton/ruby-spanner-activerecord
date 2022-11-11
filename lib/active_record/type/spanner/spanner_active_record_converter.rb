@@ -11,10 +11,8 @@ module ActiveRecord
     module Spanner
       class SpannerActiveRecordConverter
         def self.serialize_with_transaction_isolation_level type, value, isolation_level
-          # [[:req, :value], [:keyrest, :options]] determine if the serialize method supports splat options
-          serialize_method = type.method(:serialize)
-          if serialize_method.arity == -2 && serialize_method.parameters.last.first == :keyrest
-            type.serialize(value, isolation_level: isolation_level)
+          if type.respond_to?(:serialize_with_isolation_level)
+            type.serialize_with_isolation_level(value, isolation_level)
           else
             type.serialize(value)
           end
