@@ -34,7 +34,7 @@ TRAILER
           super
         end
 
-        def prepare_column_options(column)
+        def prepare_column_options column
           super.tap do |spec|
             unless column.sql_type_metadata.allow_commit_timestamp.nil?
               spec[:allow_commit_timestamp] = column.sql_type_metadata.allow_commit_timestamp
