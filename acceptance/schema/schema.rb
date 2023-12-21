@@ -194,3 +194,14 @@ def create_tables_in_test_schema
     end
   end
 end
+
+def create_tables_in_sqlite_schema
+  ActiveRecord::Schema.define(version: 1) do
+    # simulate a join table with no primary key
+    create_table :projects, id: false do |t|
+      t.integer  :plan_id
+      t.integer  :system_id
+      t.index [:plan_id, :system_id], unique: true
+    end
+  end
+end
