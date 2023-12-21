@@ -32,6 +32,13 @@ def connector_config
   }
 end
 
+def sqlite_config
+  {
+    "adapter" => "sqlite3",
+    "database" => ":memory:"
+  }
+end
+
 def spanner
   $spanner ||= Google::Cloud::Spanner.new(
     project_id: ENV["SPANNER_TEST_PROJECT"],
