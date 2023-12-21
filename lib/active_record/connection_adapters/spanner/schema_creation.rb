@@ -76,16 +76,16 @@ module ActiveRecord
           create_sql
         end
 
-        def visit_PrimaryKeyDefinition(o)
+        def visit_PrimaryKeyDefinition o
           keys = o.name.map do |name|
-            if name.is_a?(Hash)
-              name.map { |col, sort| "#{quote_column_name(col)} #{sort.upcase}" }.join(', ')
+            if name.is_a? Hash
+              name.map { |col, sort| "#{quote_column_name col} #{sort.upcase}" }.join(", ")
             else
-              quote_column_name(name)
+              quote_column_name name
             end
           end
 
-          "PRIMARY KEY (#{keys.join(', ')})"
+          "PRIMARY KEY (#{keys.join ', '})"
         end
 
         def visit_DropTableDefinition o
