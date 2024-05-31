@@ -48,8 +48,8 @@ module ActiveRecord
       spanner_adapter? && connection&.current_spanner_transaction&.isolation == :buffered_mutations
     end
 
-    def self._insert_record values, returning = [] # rubocop:disable Metrics/PerceivedComplexity:
-      unless buffered_mutations? || (primary_key && values.is_a?(Hash))
+    def self._insert_record values, returning = []
+      if !(buffered_mutations? || (primary_key && values.is_a?(Hash))) || !spanner_adapter?
         return super values if ActiveRecord.gem_version < VERSION_7_1
         return super
       end
@@ -62,6 +62,10 @@ module ActiveRecord
 
       return _buffer_record values, :insert, returning if buffered_mutations?
 
+      _insert_record_dml values, returning
+    end
+
+    def self._insert_record_dml values, returning
       primary_key_value = _set_primary_key_value values
       if ActiveRecord::VERSION::MAJOR >= 7
         im = Arel::InsertManager.new arel_table
