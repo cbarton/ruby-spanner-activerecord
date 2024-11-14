@@ -72,7 +72,7 @@ module MockServerTests
     end
 
     def abort_current_transaction
-      connection = ActiveRecord::Base.connection.instance_variable_get(:@connection)
+      connection = ActiveRecord::Base.connection.instance_variable_get(:@raw_connection)
       current_transaction = connection.instance_variable_get(:@current_transaction)
       transaction = current_transaction.instance_variable_get(:@grpc_transaction).instance_variable_get(:@grpc)
       session = connection.session.instance_variable_get(:@grpc)

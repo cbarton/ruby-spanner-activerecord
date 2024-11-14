@@ -4,6 +4,7 @@
 # license that can be found in the LICENSE file or at
 # https://opensource.org/licenses/MIT.
 
+require "ostruct"
 require "minitest/autorun"
 require "minitest/focus"
 require "minitest/rg"

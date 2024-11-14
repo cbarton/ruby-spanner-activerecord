@@ -6,8 +6,7 @@ gemspec
 gem "activerecord", ENV.fetch("AR_VERSION", "~> 6.1.6.1")
 gem "minitest", "~> 5.25.0"
 gem "minitest-rg", "~> 5.3.0"
-gem "pry", "~> 0.13.0"
-gem "pry-byebug", "~> 3.9.0"
+gem "debug"
 # Add sqlite3 for testing for compatibility with other adapters.
 gem 'sqlite3', '~> 1.4'
 

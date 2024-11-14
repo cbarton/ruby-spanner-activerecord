@@ -69,11 +69,8 @@ module ActiveRecord
       # Determines whether or not to log query binds when executing statements
       class_attribute :log_statement_binds, instance_writer: false, default: false
 
-      def initialize connection, logger, connection_options, config
-        @connection = connection
-        @connection_options = connection_options
-        super connection, logger, config
-        @raw_connection ||= connection
+      def initialize(...)
+        super
 
         # Spanner does not support unprepared statements
         @prepared_statements = true
@@ -87,42 +84,55 @@ module ActiveRecord
         NATIVE_DATABASE_TYPES
       end
 
-      # Database
-
-      def self.database_exists? config
-        connection = ActiveRecordSpannerAdapter::Connection.new config
-        connection.connect!
-        true
-      rescue ActiveRecord::NoDatabaseError
-        false
-      end
-
       # Connection management
 
+      def connect
+        @raw_connection = ActiveRecordSpannerAdapter::Connection.new(@config).tap(&:connect!)
+      rescue Google::Cloud::Error => error
+        if error.instance_of? Google::Cloud::NotFoundError
+          raise ActiveRecord::NoDatabaseError
+        end
+        raise error
+      end
+
+      def connected?
+        !@raw_connection.nil?
+      end
+
       def active?
-        @connection.active?
+        connected? && @lock.synchronize { @raw_connection.active? }
       end
 
       def disconnect!
-        super
-        @connection.disconnect!
+        @lock.synchronize do
+          super
+          @raw_connection&.disconnect!
+          @raw_connection = nil
+        end
+      end
+      alias discard! disconnect!
+
+      def reconnect
+        if connected?
+          @raw_connection.reset!
+        else
+          connect
+        end
       end
 
-      def reset!
-        super
-        @connection.reset!
-      end
-      alias reconnect! reset!
+      alias reset! reconnect!
 
       def spanner_schema_cache
         @spanner_schema_cache ||= SpannerSchemaCache.new self
       end
 
       # Spanner Connection API
-      delegate :ddl_batch, :ddl_batch?, :start_batch_ddl, :abort_batch, :run_batch, to: :@connection
+      delegate :ddl_batch, :ddl_batch?, :start_batch_ddl, :abort_batch, :run_batch, to: :raw_connection
 
       def current_spanner_transaction
-        @connection.current_transaction
+        return unless connected?
+
+        @raw_connection.current_transaction
       end
 
       # Supported features
@@ -295,5 +305,7 @@ module ActiveRecord
         end
       end
     end
+
+    register "spanner", "ActiveRecord::ConnectionAdapters::SpannerAdapter", "activerecord_spanner_adapter/active_record/connection_adapters/spanner_adapter"
   end
 end

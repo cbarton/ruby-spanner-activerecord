@@ -48,7 +48,7 @@ module ActiveRecord
       spanner_adapter? && connection&.current_spanner_transaction&.isolation == :buffered_mutations
     end
 
-    def self._insert_record values, returning = []
+    def self._insert_record connection, values, returning = []
       if !(buffered_mutations? || (primary_key && values.is_a?(Hash))) || !spanner_adapter?
         return super values if ActiveRecord.gem_version < VERSION_7_1
         return super
@@ -113,48 +113,6 @@ module ActiveRecord
 
     def self.insert_all _attributes, **_kwargs
       raise NotImplementedError, "Cloud Spanner does not support skip_duplicates. Use insert! or upsert instead."
-    end
-
-    def self.insert_all! attributes, returning: nil, **_kwargs
-      return super unless spanner_adapter?
-      return super if active_transaction? && !buffered_mutations?
-
-      # This might seem inefficient, but is actually not, as it is only buffering a mutation locally.
-      # The mutations will be sent as one batch when the transaction is committed.
-      if active_transaction?
-        attributes.each do |record|
-          _insert_record record
-        end
-      else
-        transaction isolation: :buffered_mutations do
-          attributes.each do |record|
-            _insert_record record
-          end
-        end
-      end
-    end
-
-    def self.upsert_all attributes, returning: nil, unique_by: nil, **_kwargs
-      return super unless spanner_adapter?
-      if active_transaction? && !buffered_mutations?
-        raise NotImplementedError, "Cloud Spanner does not support upsert using DML. " \
-                                   "Use upsert outside a transaction block or in a transaction " \
-                                   "block with isolation: :buffered_mutations"
-      end
-
-      # This might seem inefficient, but is actually not, as it is only buffering a mutation locally.
-      # The mutations will be sent as one batch when the transaction is committed.
-      if active_transaction?
-        attributes.each do |record|
-          _upsert_record record, returning
-        end
-      else
-        transaction isolation: :buffered_mutations do
-          attributes.each do |record|
-            _upsert_record record, returning
-          end
-        end
-      end
     end
 
     def self._buffer_record values, method, returning

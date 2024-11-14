@@ -32,15 +32,19 @@ module ActiveRecord
   module ConnectionAdapters
     module Spanner
       module Quoting
-        QUOTED_COLUMN_NAMES = Concurrent::Map.new # :nodoc:
-        QUOTED_TABLE_NAMES = Concurrent::Map.new # :nodoc:
+        extend ActiveSupport::Concern
 
-        def quote_column_name name
-          QUOTED_COLUMN_NAMES[name] ||= "`#{super.gsub '`', '``'}`".freeze
-        end
+        class_methods do
+          QUOTED_COLUMN_NAMES = Concurrent::Map.new # :nodoc:
+          QUOTED_TABLE_NAMES = Concurrent::Map.new # :nodoc:
 
-        def quote_table_name name
-          QUOTED_TABLE_NAMES[name] ||= super.gsub(".", "`.`").freeze
+          def quote_column_name name
+            QUOTED_COLUMN_NAMES[name] ||= "`#{name.to_s.gsub '`', '``'}`".freeze
+          end
+
+          def quote_table_name name
+            QUOTED_TABLE_NAMES[name] ||= "`#{name.to_s.gsub '`', '``'}`".gsub(".", "`.`").freeze
+          end
         end
 
         STR_ESCAPE_REGX = /[\n\r'\\]/.freeze

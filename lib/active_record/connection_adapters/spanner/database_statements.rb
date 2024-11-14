@@ -17,19 +17,19 @@ module ActiveRecord
 
         # DDL, DML and DQL Statements
 
-        def execute sql, name = nil, binds = []
-          internal_execute sql, name, binds
+        def execute sql, name = nil, binds = [], allow_retry: false
+          internal_execute sql, name, binds, allow_retry: allow_retry
         end
 
-        def internal_exec_query sql, name = "SQL", binds = [], prepare: false, async: false
-          result = internal_execute sql, name, binds, prepare: prepare, async: async
+        def internal_exec_query sql, name = "SQL", binds = [], prepare: false, async: false, allow_retry: false
+          result = internal_execute sql, name, binds, prepare: prepare, async: async, allow_retry: allow_retry
           ActiveRecord::Result.new(
             result.fields.keys.map(&:to_s), result.rows.map(&:values)
           )
         end
 
         def internal_execute sql, name = "SQL", binds = [],
-                             prepare: false, async: false # rubocop:disable Lint/UnusedMethodArgument
+                             prepare: false, async: false, allow_retry: false, materialize_transactions: true # rubocop:disable Lint/UnusedMethodArgument
           statement_type = sql_statement_type sql
           # Call `transform` to invoke any query transformers that might have been registered.
           sql = transform sql
@@ -44,13 +44,12 @@ module ActiveRecord
           if statement_type == :ddl
             execute_ddl sql
           else
-            execute_query_or_dml statement_type, sql, name, binds
+            execute_query_or_dml statement_type, sql, name, binds, allow_retry: allow_retry, materialize_transactions: materialize_transactions
           end
         end
 
-        def execute_query_or_dml statement_type, sql, name, binds
+        def execute_query_or_dml statement_type, sql, name, binds, allow_retry: false, materialize_transactions: true
           transaction_required = statement_type == :dml
-          materialize_transactions
 
           # First process and remove any hints in the binds that indicate that
           # a different read staleness should be used than the default.
@@ -70,13 +69,15 @@ module ActiveRecord
           log(*log_args) do
             types, params = to_types_and_params binds
             ActiveSupport::Dependencies.interlock.permit_concurrent_loads do
-              if transaction_required
-                transaction do
-                  @connection.execute_query sql, params: params, types: types, request_options: request_options
+              with_raw_connection(allow_retry: allow_retry, materialize_transactions: materialize_transactions) do |conn|
+                if transaction_required
+                  transaction do
+                    conn.execute_query sql, params: params, types: types, request_options: request_options
+                  end
+                else
+                  conn.execute_query sql, params: params, types: types, single_use_selector: selector,
+                                            request_options: request_options
                 end
-              else
-                @connection.execute_query sql, params: params, types: types, single_use_selector: selector,
-                                          request_options: request_options
               end
             end
           end
@@ -168,7 +169,7 @@ module ActiveRecord
         end
 
         def exec_mutation mutation
-          @connection.current_transaction.buffer mutation
+          current_spanner_transaction.buffer mutation
         end
 
         def update arel, name = nil, binds = []
@@ -204,9 +205,15 @@ module ActiveRecord
         def truncate table_name, name = nil
           Array(table_name).each do |t|
             log "TRUNCATE #{t}", name do
-              @connection.truncate t
+              with_raw_connection(allow_retry: false, materialize_transactions: false) do |conn|
+                conn.truncate t
+              end
             end
           end
+        end
+
+        def truncate_tables(*table_names)
+          truncate(table_names)
         end
 
         def write_query? sql
@@ -216,7 +223,9 @@ module ActiveRecord
         def execute_ddl statements, **options
           log "MIGRATION", "SCHEMA" do
             ActiveSupport::Dependencies.interlock.permit_concurrent_loads do
-              @connection.execute_ddl statements, **options
+              with_raw_connection(allow_retry: false, materialize_transactions: false) do |conn|
+                conn.execute_ddl statements, **options
+              end
             end
           end
         rescue Google::Cloud::Error => error
@@ -258,7 +267,9 @@ module ActiveRecord
 
         def begin_db_transaction
           log "BEGIN" do
-            @connection.begin_transaction
+            with_raw_connection(allow_retry: true, materialize_transactions: false) do |conn|
+              conn.begin_transaction
+            end
           end
         end
 
@@ -292,19 +303,25 @@ module ActiveRecord
           end
 
           log "BEGIN #{isolation}" do
-            @connection.begin_transaction isolation
+            with_raw_connection(allow_retry: true, materialize_transactions: false) do |conn|
+              conn.begin_transaction isolation
+            end
           end
         end
 
         def commit_db_transaction
           log "COMMIT" do
-            @connection.commit_transaction
+            with_raw_connection(allow_retry: false, materialize_transactions: true) do |conn|
+              conn.commit_transaction
+            end
           end
         end
 
         def rollback_db_transaction
           log "ROLLBACK" do
-            @connection.rollback_transaction
+            with_raw_connection(allow_retry: false, materialize_transactions: true) do |conn|
+              conn.rollback_transaction
+            end
           end
         end
 
@@ -349,9 +366,7 @@ module ActiveRecord
         # This method returns an indication whether a specific operation should use mutations instead of DML
         # based on the operation itself, and the current transaction.
         def should_use_mutation arel
-          !@connection.current_transaction.nil? \
-            && @connection.current_transaction.isolation == :buffered_mutations \
-            && can_use_mutation(arel) \
+          current_spanner_transaction&.isolation == :buffered_mutations && can_use_mutation(arel)
         end
 
         def can_use_mutation arel
