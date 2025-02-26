@@ -16,6 +16,7 @@ module ActiveRecord
 
   class Base
     VERSION_7_1 = Gem::Version.create "7.1.0"
+    VERSION_7_2 = Gem::Version.create "7.2.0"
 
     # Creates an object (or multiple objects) and saves it to the database. This method will use mutations instead
     # of DML if there is no active transaction, or if the active transaction has been created with the option
@@ -48,8 +49,26 @@ module ActiveRecord
       spanner_adapter? && connection&.current_spanner_transaction&.isolation == :buffered_mutations
     end
 
-    def self._insert_record values, returning = []
-      if !(buffered_mutations? || (primary_key && values.is_a?(Hash))) || !spanner_adapter?
+    def self._should_use_standard_insert_record? values
+      !(buffered_mutations? || (primary_key && values.is_a?(Hash))) || !spanner_adapter?
+    end
+
+    def self._internal_insert_record values
+      if ActiveRecord.gem_version < VERSION_7_2
+        _insert_record values
+      else
+        _insert_record nil, values
+      end
+    end
+
+    def self._insert_record *args
+      if ActiveRecord.gem_version < VERSION_7_2
+        values, returning = args
+      else
+        _connection, values, returning = args
+      end
+
+      if _should_use_standard_insert_record? values
         return super values if ActiveRecord.gem_version < VERSION_7_1
         return super
       end
@@ -57,7 +76,7 @@ module ActiveRecord
       # Mutations cannot be used in combination with a sequence, as mutations do not support a THEN RETURN clause.
       if buffered_mutations? && sequence_name
         raise StatementInvalid, "Mutations cannot be used to create records that use a sequence " \
-                                     "to generate the primary key. #{self} uses #{sequence_name}."
+                                "to generate the primary key. #{self} uses #{sequence_name}."
       end
 
       return _buffer_record values, :insert, returning if buffered_mutations?
@@ -99,20 +118,30 @@ module ActiveRecord
       keys = returning || primary_key
       return primary_key_value if keys == primary_key
 
-      primary_key_values_hash = Hash[primary_key.zip(primary_key_value)]
-      values = []
-      keys.each do |column|
-        values.append primary_key_values_hash[column]
+      primary_key_values_hash = primary_key.zip(primary_key_value).to_h
+      keys.map do |column|
+        primary_key_values_hash[column]
       end
-      values
     end
 
     def self._upsert_record values, returning
       _buffer_record values, :insert_or_update, returning
     end
 
-    def self.insert_all _attributes, **_kwargs
-      raise NotImplementedError, "Cloud Spanner does not support skip_duplicates. Use insert! or upsert instead."
+    def self.insert_all attributes, returning: nil, **_kwargs
+      if active_transaction? && buffered_mutations?
+        raise NotImplementedError,
+              "Spanner does not support skip_duplicates for mutations. " \
+              "Use a transaction that uses DML, or use insert! or upsert instead."
+      end
+      super
+    end
+
+    def self.insert! attributes, returning: nil, **kwargs
+      return super unless spanner_adapter?
+      return super if active_transaction? && !buffered_mutations?
+
+      insert_all! [attributes], returning: returning, **kwargs
     end
 
     def self.insert_all! attributes, returning: nil, **_kwargs
@@ -123,24 +152,27 @@ module ActiveRecord
       # The mutations will be sent as one batch when the transaction is committed.
       if active_transaction?
         attributes.each do |record|
-          _insert_record record
+          _internal_insert_record record
         end
       else
         transaction isolation: :buffered_mutations do
           attributes.each do |record|
-            _insert_record record
+            _internal_insert_record record
           end
         end
       end
     end
 
-    def self.upsert_all attributes, returning: nil, unique_by: nil, **_kwargs
+    def self.upsert attributes, returning: nil, **kwargs
       return super unless spanner_adapter?
-      if active_transaction? && !buffered_mutations?
-        raise NotImplementedError, "Cloud Spanner does not support upsert using DML. " \
-                                   "Use upsert outside a transaction block or in a transaction " \
-                                   "block with isolation: :buffered_mutations"
-      end
+      return super if active_transaction? && !buffered_mutations?
+
+      upsert_all [attributes], returning: returning, **kwargs
+    end
+
+    def self.upsert_all attributes, returning: nil, unique_by: nil, **kwargs
+      return super unless spanner_adapter?
+      return super if active_transaction? && !buffered_mutations?
 
       # This might seem inefficient, but is actually not, as it is only buffering a mutation locally.
       # The mutations will be sent as one batch when the transaction is committed.
@@ -182,11 +214,9 @@ module ActiveRecord
     end
 
     def self._set_composite_primary_key_values primary_key, values
-      primary_key_value = []
-      primary_key.each do |col|
-        primary_key_value.append _set_composite_primary_key_value col, values
+      primary_key.map do |col|
+        _set_composite_primary_key_value col, values
       end
-      primary_key_value
     end
 
     def self._set_composite_primary_key_value primary_key, values
@@ -385,14 +415,12 @@ module ActiveRecord
     end
 
     def serialize_keys metadata, keys
-      serialized_values = []
-      keys.each do |key|
-        serialized_values << ActiveRecord::Type::Spanner::SpannerActiveRecordConverter
-                             .serialize_with_transaction_isolation_level(metadata.type(key),
-                                                                         attribute_in_database(key),
-                                                                         :mutation)
+      keys.map do |key|
+        ActiveRecord::Type::Spanner::SpannerActiveRecordConverter
+          .serialize_with_transaction_isolation_level(metadata.type(key),
+                                                      attribute_in_database(key),
+                                                      :mutation)
       end
-      serialized_values
     end
 
     def _execute_version_check attempted_action # rubocop:disable Metrics/AbcSize
@@ -422,7 +450,7 @@ module ActiveRecord
 
       # We need to check the version using a SELECT query, as a mutation cannot include a WHERE clause.
       sql = "SELECT 1 FROM `#{self.class.arel_table.name}` " \
-              "WHERE #{pk_sql} AND `#{locking_column}` = @lock_version"
+            "WHERE #{pk_sql} AND `#{locking_column}` = @lock_version"
       locked_row = self.class.connection.raw_connection.execute_query sql, params: params, types: param_types
       raise ActiveRecord::StaleObjectError.new(self, attempted_action) unless locked_row.rows.any?
     end

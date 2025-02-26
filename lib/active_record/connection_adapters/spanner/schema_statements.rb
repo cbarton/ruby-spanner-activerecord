@@ -23,6 +23,7 @@ module ActiveRecord
       module SchemaStatements
         VERSION_6_1_0 = Gem::Version.create "6.1.0"
         VERSION_6_0_3 = Gem::Version.create "6.0.3"
+        VERSION_7_2 = Gem::Version.create "7.2.0"
 
         def current_database
           @connection.database_id
@@ -108,8 +109,7 @@ module ActiveRecord
         end
 
         def rename_table _table_name, _new_name
-          raise ActiveRecordSpannerAdapter::NotSupportedError, \
-                "rename_table is not implemented"
+          raise ActiveRecordSpannerAdapter::NotSupportedError, "rename_table is not implemented"
         end
 
         # Column
@@ -167,20 +167,14 @@ module ActiveRecord
           execute_schema_statements statements
         end
 
-        if ActiveRecord.gem_version < VERSION_6_1_0
-          def remove_columns table_name, *column_names
-            _remove_columns table_name, *column_names
-          end
-        else
-          def remove_columns table_name, *column_names, _type: nil, **_options
-            _remove_columns table_name, *column_names
-          end
+        def remove_columns table_name, *column_names, _type: nil, **_options
+          _remove_columns table_name, *column_names
         end
 
         def _remove_columns table_name, *column_names
           if column_names.empty?
-            raise ArgumentError, "You must specify at least one column name. "\
-              "Example: remove_columns(:people, :first_name)"
+            raise ArgumentError, "You must specify at least one column name. " \
+                                 "Example: remove_columns(:people, :first_name)"
           end
 
           statements = []
@@ -192,14 +186,8 @@ module ActiveRecord
           execute_schema_statements statements
         end
 
-        if ActiveRecord.gem_version < VERSION_6_1_0
-          def change_column table_name, column_name, type, options = {}
-            _change_column table_name, column_name, type, **options
-          end
-        else
-          def change_column table_name, column_name, type, **options
-            _change_column table_name, column_name, type, **options
-          end
+        def change_column table_name, column_name, type, **options
+          _change_column table_name, column_name, type, **options
         end
 
         def change_column_null table_name, column_name, null, _default = nil
@@ -207,14 +195,12 @@ module ActiveRecord
         end
 
         def change_column_default _table_name, _column_name, _default_or_changes
-          raise ActiveRecordSpannerAdapter::NotSupportedError, \
-                "change column with default value not supported."
+          raise ActiveRecordSpannerAdapter::NotSupportedError, "change column with default value not supported."
         end
 
         def rename_column table_name, column_name, new_column_name
           if ActiveRecord::Base.connection.ddl_batch?
-            raise ActiveRecordSpannerAdapter::NotSupportedError, \
-                  "rename_column in a DDL Batch is not supported."
+            raise ActiveRecordSpannerAdapter::NotSupportedError, "rename_column in a DDL Batch is not supported."
           end
           column = information_schema do |i|
             i.table_column table_name, column_name
@@ -279,18 +265,11 @@ module ActiveRecord
           execute_schema_statements schema_creation.accept(id), wait_until_done: wait_until_done
         end
 
-        if ActiveRecord.gem_version < VERSION_6_1_0
-          def remove_index table_name, options = {}
-            index_name = index_name_for_remove table_name, options
-            execute "DROP INDEX #{quote_table_name index_name}"
-          end
-        else
-          def remove_index table_name, column_name = nil, **options
-            return if options[:if_exists] && !index_exists?(table_name, column_name, **options)
+        def remove_index table_name, column_name = nil, **options
+          return if options[:if_exists] && !index_exists?(table_name, column_name, **options)
 
-            index_name = index_name_for_remove table_name, column_name, options
-            execute "DROP INDEX #{quote_table_name index_name}"
-          end
+          index_name = index_name_for_remove table_name, column_name, options
+          execute "DROP INDEX #{quote_table_name index_name}"
         end
 
         def rename_index table_name, old_name, new_name
@@ -359,14 +338,8 @@ module ActiveRecord
           end
         end
 
-        if ActiveRecord.gem_version < VERSION_6_0_3
-          def add_foreign_key from_table, to_table, options = {}
-            _add_foreign_key from_table, to_table, **options
-          end
-        else
-          def add_foreign_key from_table, to_table, **options
-            _add_foreign_key from_table, to_table, **options
-          end
+        def add_foreign_key from_table, to_table, **options
+          _add_foreign_key from_table, to_table, **options
         end
 
         def _add_foreign_key from_table, to_table, **options
@@ -401,6 +374,16 @@ module ActiveRecord
 
         def check_constraints table_name
           information_schema { |i| i.check_constraints table_name }
+        end
+
+        if ActiveRecord.gem_version >= VERSION_7_2
+          def migration_context
+            pool.migration_context
+          end
+
+          def schema_migration
+            pool.schema_migration
+          end
         end
 
         def assume_migrated_upto_version version
@@ -499,8 +482,8 @@ module ActiveRecord
           type ||= column.type
           options[:null] = column.null unless options.key? :null
 
-          if ["STRING", "BYTES"].include? type
-            options[:limit] = column.limit unless options.key? :limit
+          if ["STRING", "BYTES"].include?(type) && !options.key?(:limit)
+            options[:limit] = column.limit
           end
 
           # Only timestamp type can set commit timestamp
@@ -633,8 +616,7 @@ module ActiveRecord
         end
 
         def information_schema
-          info_schema = \
-            ActiveRecordSpannerAdapter::Connection.information_schema @config
+          info_schema = ActiveRecordSpannerAdapter::Connection.information_schema @config
 
           return info_schema unless block_given?
 
