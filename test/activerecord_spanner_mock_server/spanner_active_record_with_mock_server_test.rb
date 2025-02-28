@@ -18,12 +18,22 @@ module MockServerTests
     VERSION_7_1_0 = Gem::Version.create('7.1.0')
 
     def test_insert
-      singer = { first_name: "Alice", last_name: "Ecila" }
+      sql = "INSERT OR IGNORE INTO `singers` (`first_name`,`last_name`) VALUES ('Alice', 'Ecila')"
+      @mock.put_statement_result sql, StatementResult.new(1)
 
-      assert_raises(NotImplementedError) { Singer.insert(singer) }
+      singer = { first_name: "Alice", last_name: "Ecila" }
+      Singer.insert(singer)
+
+      execute_requests = @mock.requests.select { |req| req.is_a?(ExecuteSqlRequest) && req.sql == sql }
+      assert_equal 1, execute_requests.length
+      commit_requests = @mock.requests.select { |req| req.is_a?(CommitRequest) }
+      assert_equal 1, commit_requests.length
+      mutations = commit_requests[0].mutations
+      assert_equal 0, mutations.length
     end
 
     def test_insert_other_adapter
+      skip if ActiveRecord.version < Gem::Version.create("7.1.0")
       ActiveRecord::Base.establish_connection(
         adapter: "sqlite3",
         database: ":memory:",
@@ -78,8 +88,8 @@ module MockServerTests
       assert_equal "id", mutation.insert.columns[2]
     end
 
-    if VERSION_7_1_0
-      def test_insert_with_disabled_prepared_statements
+    def test_insert_with_disabled_prepared_statements
+      if ActiveRecord.respond_to?(:disable_prepared_statements)
         ActiveRecord.disable_prepared_statements = true
         ActiveRecord::Base.establish_connection(
           adapter: "spanner",
@@ -89,10 +99,24 @@ module MockServerTests
           database: "testdb",
         )
         assert ActiveRecord::Base.connection.prepared_statements?
+      end
 
+      insert_sql = "INSERT INTO `singers` (`first_name`, `last_name`, `id`) VALUES (@p1, @p2, @p3)"
+      @mock.put_statement_result insert_sql, StatementResult.new(1)
+      ActiveRecord::Base.transaction do
         singer = { first_name: "Alice", last_name: "Ecila" }
-        singer = Singer.insert! singer
-      ensure
+        Singer.create singer
+      end
+
+      requests = @mock.requests
+      request = requests.select { |req| req.is_a?(ExecuteSqlRequest) && req.sql == insert_sql }.first
+      assert_equal "Alice", request.params["p1"]
+      assert_equal "Ecila", request.params["p2"]
+      assert_equal :STRING, request.param_types["p1"].code
+      assert_equal :STRING, request.param_types["p2"].code
+      assert_equal :INT64, request.param_types["p3"].code
+    ensure
+      if ActiveRecord.respond_to?(:disable_prepared_statements)
         ActiveRecord.disable_prepared_statements = false
       end
     end
@@ -343,6 +367,8 @@ module MockServerTests
     end
 
     def test_create_singer_with_last_performance_as_non_iso_string
+      return if "#{RUBY_VERSION}" < "3" && ActiveRecord::gem_version >= VERSION_7_1_0
+
       insert_sql = "INSERT INTO `singers` (`first_name`, `last_name`, `last_performance`, `id`) VALUES (@p1, @p2, @p3, @p4)"
       @mock.put_statement_result insert_sql, StatementResult.new(1)
 
@@ -856,7 +882,7 @@ module MockServerTests
       @mock.put_statement_result albums_sql, MockServerTests::create_random_albums_result(2)
       singer = Singer.find_by id: 1
 
-      update_albums_sql = ActiveRecord::gem_version < VERSION_7_1_0 \
+      update_albums_sql = ActiveRecord::gem_version < VERSION_7_1_0 || ActiveRecord::VERSION::MAJOR >= 8 \
                      ? "UPDATE `albums` SET `singer_id` = @p1 WHERE `albums`.`singer_id` = @p2 AND `albums`.`id` IN (@p3, @p4)"
                      : "UPDATE `albums` SET `singer_id` = @p1 WHERE `albums`.`singer_id` = @p2 AND (`albums`.`id` = @p3 OR `albums`.`id` = @p4)"
       @mock.put_statement_result update_albums_sql, StatementResult.new(2)
@@ -1057,7 +1083,7 @@ module MockServerTests
       begin
         current_query_transformers = _enable_query_logs
 
-        sql = "/*request_tag:true,action:test_query_logs*/ SELECT `singers`.* FROM `singers`"
+        sql = "/*_request_tag:true,action:test_query_logs*/ SELECT `singers`.* FROM `singers`"
         @mock.put_statement_result sql, MockServerTests::create_random_singers_result(4)
         Singer.all.each do |singer|
           refute_nil singer.id, "singer.id should not be nil"
@@ -1078,7 +1104,8 @@ module MockServerTests
       begin
         current_query_transformers = _enable_query_logs
 
-        sql = "/*request_tag:true,action:test_query_logs*/ SELECT `singers`.* FROM `singers` /* request_tag: selecting all singers */"
+        header = "/*_request_tag:true,action:test_query_logs*/"
+        sql = "#{header} SELECT `singers`.* FROM `singers` /* request_tag: selecting all singers */"
         @mock.put_statement_result sql, MockServerTests::create_random_singers_result(4)
         Singer.annotate("request_tag: selecting all singers").all.each do |singer|
           refute_nil singer.id, "singer.id should not be nil"
@@ -1103,14 +1130,14 @@ module MockServerTests
 
       ActiveRecord.query_transformers << ActiveRecord::QueryLogs
       ActiveRecord::QueryLogs.prepend_comment = true
-      ActiveRecord::QueryLogs.taggings.merge!(
+      ActiveRecord::QueryLogs.taggings = {
         application:  "test-app",
         action:       "test_query_logs",
         pid:          -> { Process.pid.to_s },
-      )
+      }
       ActiveRecord::QueryLogs.tags = [
         {
-          request_tag:  "true",
+          _request_tag:  "true",
         },
         :controller,
         :action,
@@ -1129,16 +1156,20 @@ module MockServerTests
     def _disable_query_logs current_query_transformers
       current_query_transformers.each do |transformer|
         ActiveRecord.query_transformers.delete transformer
-      end
+      end if current_query_transformers
     end
 
     def test_insert_all
+      sql = "INSERT OR IGNORE INTO `singers` (`id`,`first_name`,`last_name`) " +
+            "VALUES (1, 'Dave', 'Allison'), (2, 'Alice', 'Davidson'), (3, 'Rene', 'Henderson')"
+      @mock.put_statement_result sql, StatementResult.new(3)
+
       values = [
         {id: 1, first_name: "Dave", last_name: "Allison"},
         {id: 2, first_name: "Alice", last_name: "Davidson"},
         {id: 3, first_name: "Rene", last_name: "Henderson"},
       ]
-      assert_raises(NotImplementedError) { Singer.insert_all values }
+      Singer.insert_all values
     end
 
     def test_insert_all_bang_mutations
@@ -1208,17 +1239,159 @@ module MockServerTests
     end
 
     def test_upsert_all_dml
+      sql = "INSERT OR UPDATE INTO `singers` (`id`,`first_name`,`last_name`) " +
+            "VALUES (1, 'Dave', 'Allison'), (2, 'Alice', 'Davidson'), (3, 'Rene', 'Henderson')"
+      @mock.put_statement_result sql, StatementResult.new(3)
+
       values = [
         {id: 1, first_name: "Dave", last_name: "Allison"},
         {id: 2, first_name: "Alice", last_name: "Davidson"},
         {id: 3, first_name: "Rene", last_name: "Henderson"},
       ]
-      err = assert_raises(NotImplementedError) do
-        Singer.transaction do
-          Singer.upsert_all values
-        end
+      Singer.transaction do
+        Singer.upsert_all values
       end
-      assert_match "Use upsert outside a transaction block", err.message
+
+      commit_requests = @mock.requests.select { |req| req.is_a?(CommitRequest) }
+      assert_equal 1, commit_requests.length
+      assert_equal 0, commit_requests[0].mutations.length
+      execute_requests = @mock.requests.select { |req| req.is_a?(ExecuteSqlRequest) && req.sql == sql }
+      assert_equal 1, execute_requests.length
+    end
+
+    def test_binary_id
+      user = User.create!(
+        email: "test@example.com",
+        full_name: "Test User"
+      )
+      # Verify that an ID was generated for the User.
+      assert user.id
+      assert user.id.is_a?(StringIO)
+
+      commit_requests = @mock.requests.select { |req| req.is_a?(CommitRequest) }
+      assert_equal 1, commit_requests.length
+      assert_equal 1, commit_requests[0].mutations.length
+      mutation = commit_requests[0].mutations[0]
+      assert_equal :insert, mutation.operation
+      assert_equal "users", mutation.insert.table
+
+      assert_equal 1, mutation.insert.values.length
+      assert_equal 3, mutation.insert.values[0].length
+      assert_equal to_base64(user.id), mutation.insert.values[0][0]
+      assert_equal "test@example.com", mutation.insert.values[0][1]
+      assert_equal "Test User", mutation.insert.values[0][2]
+    end
+
+    def test_binary_id_association
+      user = User.create!(
+        email: "test@example.com",
+        full_name: "Test User"
+      )
+      project1 = BinaryProject.create!(
+        name: "Test Project 1",
+        description: "Test Description 1",
+        owner: user
+      )
+      project2 = BinaryProject.create!(
+        name: "Test Project 2",
+        description: "Test Description 2",
+        owner: user
+      )
+      # Verify that an ID was generated for the records.
+      assert user.id
+      assert project1.id
+      assert project2.id
+
+      commit_requests = @mock.requests.select { |req| req.is_a?(CommitRequest) }
+      assert_equal 3, commit_requests.length
+      assert_equal 1, commit_requests[1].mutations.length
+      mutation = commit_requests[1].mutations[0]
+      assert_equal :insert, mutation.operation
+      assert_equal "binary_projects", mutation.insert.table
+
+      assert_equal 1, mutation.insert.values.length
+      assert_equal 4, mutation.insert.values[0].length
+      assert_equal to_base64(project1.id), mutation.insert.values[0][0]
+      assert_equal "Test Project 1", mutation.insert.values[0][1]
+      assert_equal "Test Description 1", mutation.insert.values[0][2]
+      assert_equal to_base64(user.id), mutation.insert.values[0][3]
+    end
+
+    def test_binary_id_association_includes
+      col_id = Field.new name: "id", type: Type.new(code: TypeCode::BYTES)
+      col_email = Field.new name: "email", type: Type.new(code: TypeCode::STRING)
+      col_full_name = Field.new name: "full_name", type: Type.new(code: TypeCode::STRING)
+
+      metadata = ResultSetMetadata.new row_type: StructType.new
+      metadata.row_type.fields.push col_id, col_email, col_full_name
+      result_set = ResultSet.new metadata: metadata
+
+      user_id = to_base64(StringIO.new(SecureRandom.random_bytes(16)))
+      row = ListValue.new
+      row.values.push(
+        Value.new(string_value: user_id),
+        Value.new(string_value: "test_user@example.com"),
+        Value.new(string_value: "Test User")
+      )
+      result_set.rows.push row
+      statement_result = StatementResult.new(result_set)
+
+      sql = "SELECT `users`.* FROM `users` ORDER BY `users`.`id` ASC LIMIT @p1"
+      @mock.put_statement_result sql, statement_result
+
+      col_id = Field.new name: "id", type: Type.new(code: TypeCode::BYTES)
+      col_name = Field.new name: "name", type: Type.new(code: TypeCode::STRING)
+      col_description = Field.new name: "description", type: Type.new(code: TypeCode::STRING)
+      col_owner = Field.new name: "owner_id", type: Type.new(code: TypeCode::BYTES)
+
+      metadata = ResultSetMetadata.new row_type: StructType.new
+      metadata.row_type.fields.push col_id, col_name, col_description, col_owner
+      result_set = ResultSet.new metadata: metadata
+
+      project_count = 3
+      (1..project_count).each { |i|
+        row = ListValue.new
+        row.values.push(
+          Value.new(string_value: to_base64(StringIO.new(SecureRandom.random_bytes(16)))),
+          Value.new(string_value: "Test Project #{i}"),
+          Value.new(string_value: "Test Project Description #{i}"),
+          Value.new(string_value: user_id)
+        )
+        result_set.rows.push row
+      }
+      statement_result = StatementResult.new(result_set)
+      projects_sql = "SELECT `binary_projects`.* FROM `binary_projects` WHERE `binary_projects`.`owner_id` = @p1"
+      @mock.put_statement_result projects_sql, statement_result
+
+      users = User.all.includes(:binary_projects)
+      u1 = users.first
+      found = 0
+      u1.binary_projects.each do |_|
+        found += 1
+      end
+      assert_equal project_count, found
+    end
+
+    def test_skip_binary_deserialization
+      ENV["SPANNER_BYTES_DESERIALIZE_DISABLED"] = "true"
+      begin
+        user = User.create!(
+          email: "test@example.com",
+          full_name: "Test User"
+        )
+        # Verify that the ID is returned as a Base64 string.
+        assert user.id
+        assert user.id.is_a?(String)
+        assert_equal user.id, Base64.strict_encode64(Base64.strict_decode64(user.id))
+      ensure
+        ENV.delete("SPANNER_BYTES_DESERIALIZE_DISABLED")
+      end
+    end
+
+    def to_base64 buffer
+      buffer.rewind
+      value = buffer.read
+      Base64.strict_encode64 value.force_encoding("ASCII-8BIT")
     end
 
     private

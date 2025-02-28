@@ -1,5 +1,42 @@
 # Changelog
 
+### 2.0.0 (2025-01-23)
+
+### ⚠ BREAKING CHANGES
+
+* drop support for Rails 6.1 ([#346](https://github.com/googleapis/ruby-spanner-activerecord/issues/346))
+* deserialize BYTES to StringIO ([#343](https://github.com/googleapis/ruby-spanner-activerecord/issues/343))
+
+#### Features
+
+* drop support for Rails 6.1 ([#346](https://github.com/googleapis/ruby-spanner-activerecord/issues/346)) 
+* support Rails 8.0 ([#331](https://github.com/googleapis/ruby-spanner-activerecord/issues/331)) 
+#### Bug Fixes
+
+* deserialize BYTES to StringIO ([#343](https://github.com/googleapis/ruby-spanner-activerecord/issues/343)) 
+#### Documentation
+
+* add rails dbconsole to list of limitations ([#224](https://github.com/googleapis/ruby-spanner-activerecord/issues/224)) 
+
+### 1.8.0 (2024-12-12)
+
+#### Features
+
+* INSERT OR [IGNORE|UPDATE] ([#332](https://github.com/googleapis/ruby-spanner-activerecord/issues/332)) 
+#### Bug Fixes
+
+* Fixed incorrect argument handling. ([#333](https://github.com/googleapis/ruby-spanner-activerecord/issues/333)) 
+
+### 1.7.0 (2024-12-11)
+
+#### Features
+
+* support Rails 7.2.0 ([#328](https://github.com/googleapis/ruby-spanner-activerecord/issues/328)) 
+#### Bug Fixes
+
+* `SpannerAdapter` requires prepared statements to be enabled ([#323](https://github.com/googleapis/ruby-spanner-activerecord/issues/323)) 
+* local emulator test ([#320](https://github.com/googleapis/ruby-spanner-activerecord/issues/320)) 
+
 ### 1.6.3 (2024-08-31)
 
 #### Bug Fixes

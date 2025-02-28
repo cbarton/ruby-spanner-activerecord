@@ -28,16 +28,18 @@ require "activerecord_spanner_adapter/primary_key"
 require "activerecord_spanner_adapter/transaction"
 
 module ActiveRecord
-  module ConnectionHandling # :nodoc:
-    def spanner_connection config
-      connection = ActiveRecordSpannerAdapter::Connection.new config
-      connection.connect!
-      ConnectionAdapters::SpannerAdapter.new connection, logger, nil, config
-    rescue Google::Cloud::Error => error
-      if error.instance_of? Google::Cloud::NotFoundError
-        raise ActiveRecord::NoDatabaseError
+  if ActiveRecord.version < Gem::Version.new("7.2")
+    module ConnectionHandling # :nodoc:
+      def spanner_connection config
+        connection = ActiveRecordSpannerAdapter::Connection.new config
+        connection.connect!
+        ConnectionAdapters::SpannerAdapter.new connection, logger, nil, config
+      rescue Google::Cloud::Error => error
+        if error.instance_of? Google::Cloud::NotFoundError
+          raise ActiveRecord::NoDatabaseError
+        end
+        raise error
       end
-      raise error
     end
   end
 
@@ -69,12 +71,19 @@ module ActiveRecord
       # Determines whether or not to log query binds when executing statements
       class_attribute :log_statement_binds, instance_writer: false, default: false
 
-      def initialize connection, logger, connection_options, config
-        @connection = connection
-        @connection_options = connection_options
-        super connection, logger, config
-        @raw_connection ||= connection
-
+      def initialize config_or_deprecated_connection, deprecated_logger = nil,
+                     deprecated_connection_options = nil, deprecated_config = nil
+        if config_or_deprecated_connection.is_a? Hash
+          @connection = ActiveRecordSpannerAdapter::Connection.new config_or_deprecated_connection
+          @connection.connect!
+          super config_or_deprecated_connection
+          @raw_connection ||= @connection
+        else
+          @connection = config_or_deprecated_connection
+          @connection_options = deprecated_connection_options
+          super config_or_deprecated_connection, deprecated_logger, deprecated_config
+          @raw_connection ||= config_or_deprecated_connection
+        end
         # Spanner does not support unprepared statements
         @prepared_statements = true
       end
@@ -200,12 +209,14 @@ module ActiveRecord
           raise "ActiveRecordSpannerAdapter does not support insert_sql with buffered_mutations transaction."
         end
 
-        if insert.skip_duplicates? || insert.update_duplicates?
-          raise NotImplementedError, "CloudSpanner does not support skip_duplicates and update_duplicates."
-        end
-
         values_list, = insert.values_list
-        "INSERT #{insert.into} #{values_list}"
+        prefix = "INSERT"
+        if insert.update_duplicates?
+          prefix += " OR UPDATE"
+        elsif insert.skip_duplicates?
+          prefix += " OR IGNORE"
+        end
+        "#{prefix} #{insert.into} #{values_list}"
       end
 
       module TypeMapBuilder
@@ -265,7 +276,9 @@ module ActiveRecord
       end
 
       def transform sql
-        if ActiveRecord::VERSION::MAJOR >= 7
+        if ActiveRecord::VERSION::MAJOR >= 8
+          preprocess_query sql
+        elsif ActiveRecord::VERSION::MAJOR == 7
           transform_query sql
         else
           sql
@@ -273,12 +286,23 @@ module ActiveRecord
       end
 
       # Overwrite the standard log method to be able to translate exceptions.
-      def log sql, name = "SQL", binds = [], type_casted_binds = [], statement_name = nil, *args
-        super
-      rescue ActiveRecord::StatementInvalid
-        raise
-      rescue StandardError => e
-        raise translate_exception_class(e, sql, binds)
+      # sql, name = "SQL", binds = [], type_casted_binds = [], async: false, &block
+      if ActiveRecord::VERSION::MAJOR >= 8
+        def log sql, name = "SQL", binds = [], type_casted_binds = [], async: false, &block
+          super
+        rescue ActiveRecord::StatementInvalid
+          raise
+        rescue StandardError => e
+          raise translate_exception_class(e, sql, binds)
+        end
+      else
+        def log sql, name = "SQL", binds = [], type_casted_binds = [], statement_name = nil, *args
+          super
+        rescue ActiveRecord::StatementInvalid
+          raise
+        rescue StandardError => e
+          raise translate_exception_class(e, sql, binds)
+        end
       end
 
       def translate_exception exception, message:, sql:, binds:
