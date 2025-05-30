@@ -305,7 +305,56 @@ module MockServerTests
           TableWithSequence.create(name: "Foo")
         end
       end
-      assert_equal "Mutations cannot be used to create records that use a sequence to generate the primary key. MockServerTests::TableWithSequence uses test_sequence.", err.message
+      assert_equal "Mutations cannot be used to create records that use an auto-generated primary key.", err.message
+    end
+
+    def test_save_with_identity
+      insert_sql = "INSERT INTO `table_with_identity` (`name`) VALUES (@p1) THEN RETURN `id`"
+      @mock.put_statement_result insert_sql, MockServerTests::create_id_returning_result_set(1, 1)
+
+      record = TableWithIdentity.transaction do
+        TableWithIdentity.create(name: "Foo")
+      end
+      assert_equal 1, record.id
+    end
+
+    def test_save_with_identity_without_transaction
+      insert_sql = "INSERT INTO `table_with_identity` (`name`) VALUES (@p1) THEN RETURN `id`"
+      @mock.put_statement_result insert_sql, MockServerTests::create_id_returning_result_set(1, 1)
+
+      record = TableWithIdentity.create(name: "Foo")
+      assert_equal 1, record.id
+    end
+
+    def test_save_with_identity_and_mutations
+      err = assert_raises ActiveRecord::StatementInvalid do
+        TableWithIdentity.transaction isolation: :buffered_mutations do
+          TableWithIdentity.create(name: "Foo")
+        end
+      end
+      assert_equal "Mutations cannot be used to create records that use an auto-generated primary key.", err.message
+    end
+
+    def test_save_with_identity_and_mutations_and_preset_primary_key_value
+      record = nil
+      TableWithIdentity.transaction isolation: :buffered_mutations do
+        record = TableWithIdentity.create id: 1, name: "Foo"
+      end
+      assert_equal 1, record.id
+    end
+
+    def test_save_with_identity_and_mutations_and_use_client_side_id_for_mutations
+      reset_value = TableWithIdentity.connection.use_client_side_id_for_mutations
+      begin
+        record = nil
+        TableWithIdentity.connection.use_client_side_id_for_mutations = true
+        TableWithIdentity.transaction isolation: :buffered_mutations do
+          record = TableWithIdentity.create name: "Foo"
+        end
+        assert record.id && record.id > 0, "id should be non-zero, but is #{record.id}"
+      ensure
+        TableWithIdentity.connection.use_client_side_id_for_mutations = reset_value
+      end
     end
 
     def test_after_save
@@ -1018,6 +1067,19 @@ module MockServerTests
       assert_equal sql, execute_sql_request.sql
     end
 
+    def test_query_priority_hint
+      sql = "SELECT  `singers`.* FROM `singers`"
+      @mock.put_statement_result sql, MockServerTests::create_random_singers_result(4)
+      Singer.optimizer_hints("priority: PRIORITY_LOW").all.each do |singer|
+        refute_nil singer.id, "singer.id should not be nil"
+      end
+      select_requests = @mock.requests.select { |req| req.is_a?(Google::Cloud::Spanner::V1::ExecuteSqlRequest) && req.sql == sql }
+      select_requests.each do |request|
+        assert request.request_options
+        assert_equal :PRIORITY_LOW, request.request_options.priority
+      end
+    end
+
     def test_query_annotate_request_tag
       sql = "SELECT `singers`.* FROM `singers` /* request_tag: selecting all singers */"
       @mock.put_statement_result sql, MockServerTests::create_random_singers_result(4)
@@ -1027,6 +1089,20 @@ module MockServerTests
       select_requests = @mock.requests.select { |req| req.is_a?(Google::Cloud::Spanner::V1::ExecuteSqlRequest) && req.sql == sql }
       select_requests.each do |request|
         assert request.request_options
+        assert_equal "selecting all singers", request.request_options.request_tag
+      end
+    end
+
+    def test_query_priority_hint_and_request_tag
+      sql = "SELECT  `singers`.* FROM `singers` /* request_tag: selecting all singers */"
+      @mock.put_statement_result sql, MockServerTests::create_random_singers_result(4)
+      Singer.annotate("request_tag: selecting all singers").optimizer_hints("priority: PRIORITY_LOW").all.each do |singer|
+        refute_nil singer.id, "singer.id should not be nil"
+      end
+      select_requests = @mock.requests.select { |req| req.is_a?(Google::Cloud::Spanner::V1::ExecuteSqlRequest) && req.sql == sql }
+      select_requests.each do |request|
+        assert request.request_options
+        assert_equal :PRIORITY_LOW, request.request_options.priority
         assert_equal "selecting all singers", request.request_options.request_tag
       end
     end
