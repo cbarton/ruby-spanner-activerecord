@@ -1,5 +1,28 @@
 # Changelog
 
+### 2.3.0 (2025-05-30)
+
+#### Features
+
+* Add optimizer hint syntax to set a priority in request options ([#363](https://github.com/googleapis/ruby-spanner-activerecord/issues/363)) 
+* support ruby 3.4 ([#359](https://github.com/googleapis/ruby-spanner-activerecord/issues/359)) 
+
+### 2.2.0 (2025-04-03)
+
+#### Features
+
+* transaction isolation level ([#355](https://github.com/googleapis/ruby-spanner-activerecord/issues/355)) 
+
+### 2.1.0 (2025-03-17)
+
+#### Features
+
+* support IDENTITY columns for auto-generated primary keys ([#352](https://github.com/googleapis/ruby-spanner-activerecord/issues/352)) 
+#### Documentation
+
+* add a test to verify that FOR UPDATE can be used ([#348](https://github.com/googleapis/ruby-spanner-activerecord/issues/348)) 
+* update README with the correct supported versions ([#349](https://github.com/googleapis/ruby-spanner-activerecord/issues/349)) 
+
 ### 2.0.0 (2025-01-23)
 
 ### ⚠ BREAKING CHANGES

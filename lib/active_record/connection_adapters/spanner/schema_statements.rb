@@ -21,8 +21,6 @@ module ActiveRecord
       # [Schema Doc](https://cloud.google.com/spanner/docs/information-schema)
       #
       module SchemaStatements
-        VERSION_6_1_0 = Gem::Version.create "6.1.0"
-        VERSION_6_0_3 = Gem::Version.create "6.0.3"
         VERSION_7_2 = Gem::Version.create "7.2.0"
 
         def current_database
@@ -125,18 +123,20 @@ module ActiveRecord
             fetch_type_metadata(field.spanner_type,
                                 field.ordinal_position,
                                 field.allow_commit_timestamp,
-                                field.generated),
+                                field.generated,
+                                is_identity: field.is_identity),
             field.nullable,
             field.default_function,
             primary_key: field.primary_key
         end
 
-        def fetch_type_metadata sql_type, ordinal_position = nil, allow_commit_timestamp = nil, generated = nil
+        def fetch_type_metadata sql_type, ordinal_position = nil, allow_commit_timestamp = nil, generated = nil,
+                                is_identity: false
           Spanner::TypeMetadata.new \
             super(sql_type),
             ordinal_position: ordinal_position,
             allow_commit_timestamp: allow_commit_timestamp,
-            generated: generated
+            generated: generated, is_identity: is_identity
         end
 
         def add_column table_name, column_name, type, **options
